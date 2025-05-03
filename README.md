@@ -2,6 +2,8 @@
 
 A modern, responsive web application built with React and TypeScript to help job seekers track their job applications and interviews
 
+Available at https://job-application-tracker-eosin.vercel.app/
+
 ## Features
 
 - 📝 Track job applications with detailed information
