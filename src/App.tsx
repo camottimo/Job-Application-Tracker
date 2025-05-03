@@ -150,6 +150,7 @@ function App() {
     interviewTime: '',
   });
   const [editingApplication, setEditingApplication] = useState<string | null>(null);
+  const [hasTriedParse, setHasTriedParse] = useState(false);
 
   // Add export functionality
   const handleExportData = () => {
@@ -309,6 +310,7 @@ function App() {
         position: position === undefined ? prev.position : position,
         location: location || prev.location
       }));
+      setHasTriedParse(true);
     }
   };
 
@@ -426,7 +428,7 @@ function App() {
                 className="w-full px-4 py-2 rounded-lg bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 required
               />
-              {newApplication.position === '' && (
+              {hasTriedParse && newApplication.position === '' && (
                 <p className="mt-1 text-sm text-red-400">Can't fetch job title. Please enter it manually.</p>
               )}
             </div>
