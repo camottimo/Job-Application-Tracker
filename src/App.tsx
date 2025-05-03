@@ -114,52 +114,41 @@ const parseJobUrl = async (url: string): Promise<{ company: string; position: st
 
     // Extract location from URL or job details
     const getLocationFromUrl = async (path: string, hostname: string): Promise<string> => {
-      // For Greenhouse.io format
-      if (hostname.includes('greenhouse.io')) {
-        const pathParts = path.split('/');
-        const jobIndex = pathParts.findIndex(part => part === 'jobs');
-        if (jobIndex !== -1) {
-          const jobId = pathParts[jobIndex + 1]?.split('?')[0];
-          if (jobId) {
-            try {
-              // Try to fetch job details from Greenhouse API
-              const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${pathParts[jobIndex - 1]}/jobs/${jobId}`);
-              if (response.ok) {
-                const data = await response.json();
-                if (data.offices && data.offices.length > 0) {
-                  // Handle multiple locations
-                  const locations = data.offices.map((office: any) => office.name);
-                  return locations.join('; ');
-                }
-              }
-            } catch (error) {
-              console.error('Error fetching job details:', error);
+      try {
+        // For any job board, try to fetch the job details
+        const response = await fetch(path);
+        if (response.ok) {
+          const html = await response.text();
+          
+          // Look for location information in common formats
+          const locationPatterns = [
+            /location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /job location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /work location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /office location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /based in:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /work from:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
+            /remote:?\s*([^<,]+(?:,\s*[^<,]+)*)/i
+          ];
+
+          // Try each pattern until we find a match
+          for (const pattern of locationPatterns) {
+            const match = html.match(pattern);
+            if (match) {
+              const location = match[1].trim();
+              // Clean up the location text
+              return location
+                .replace(/<[^>]*>/g, '') // Remove HTML tags
+                .replace(/\s+/g, ' ')    // Normalize whitespace
+                .trim();
             }
           }
         }
+      } catch (error) {
+        console.error('Error fetching job details:', error);
       }
 
-      // For LinkedIn format
-      if (hostname.includes('linkedin.com')) {
-        const pathParts = path.split('/');
-        const jobIndex = pathParts.findIndex(part => part === 'jobs' || part === 'job');
-        if (jobIndex !== -1) {
-          try {
-            // Try to extract location from the job title or description
-            const jobTitle = pathParts[jobIndex + 1];
-            if (jobTitle) {
-              const locationMatch = jobTitle.match(/(?:in|at|from)\s+([^,]+(?:,\s*[^,]+)*)/i);
-              if (locationMatch) {
-                return locationMatch[1].trim();
-              }
-            }
-          } catch (error) {
-            console.error('Error parsing LinkedIn location:', error);
-          }
-        }
-      }
-
-      // Default to empty string if no location found
+      // If no location found, return empty string
       return '';
     };
 
@@ -184,6 +173,8 @@ function App() {
     status: 'Applied',
     appliedDate: format(new Date(), 'yyyy-MM-dd'),
     jobLink: '',
+    interviewDate: '',
+    interviewTime: '',
   });
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -196,6 +187,8 @@ function App() {
       status: newApplication.status || 'Applied',
       appliedDate: newApplication.appliedDate || format(new Date(), 'yyyy-MM-dd'),
       jobLink: newApplication.jobLink || '',
+      interviewDate: newApplication.interviewDate || '',
+      interviewTime: newApplication.interviewTime || '',
     };
     
     setApplications([...applications, application]);
@@ -206,6 +199,8 @@ function App() {
       status: 'Applied',
       appliedDate: format(new Date(), 'yyyy-MM-dd'),
       jobLink: '',
+      interviewDate: '',
+      interviewTime: '',
     });
   };
 
@@ -232,6 +227,32 @@ function App() {
         position: position || prev.position,
         location: location || prev.location
       }));
+    }
+  };
+
+  const handleDeleteApplication = (id: string) => {
+    setApplications(applications.filter(app => app.id !== id));
+  };
+
+  const formatInterviewDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      return format(date, 'MMMM d, yyyy');
+    } catch (error) {
+      return dateStr;
+    }
+  };
+
+  const formatInterviewTime = (timeStr: string) => {
+    try {
+      // Convert 24-hour time to 12-hour time with AM/PM
+      const [hours, minutes] = timeStr.split(':');
+      const date = new Date();
+      date.setHours(parseInt(hours, 10));
+      date.setMinutes(parseInt(minutes, 10));
+      return format(date, 'h:mm a');
+    } catch (error) {
+      return timeStr;
     }
   };
 
@@ -376,6 +397,7 @@ function App() {
                   <th className="px-6 py-4 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-4 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Applied Date</th>
                   <th className="px-6 py-4 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Interview</th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-300 uppercase tracking-wider"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
@@ -410,9 +432,27 @@ function App() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{app.appliedDate}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                      {app.status === 'Interview' && app.interviewDate && (
-                        <span>{app.interviewDate} {app.interviewTime}</span>
+                      {app.status === 'Interview' && (
+                        <div className="flex flex-col">
+                          {app.interviewDate && (
+                            <span className="text-gray-300">Date: {formatInterviewDate(app.interviewDate)}</span>
+                          )}
+                          {app.interviewTime && (
+                            <span className="text-gray-300">Time: {formatInterviewTime(app.interviewTime)}</span>
+                          )}
+                        </div>
                       )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <button
+                        onClick={() => handleDeleteApplication(app.id)}
+                        className="text-red-400 hover:text-red-300 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 rounded-full p-1 transition-colors duration-200"
+                        title="Delete application"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                        </svg>
+                      </button>
                     </td>
                   </tr>
                 ))}
