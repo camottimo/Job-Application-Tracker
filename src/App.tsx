@@ -1,4 +1,4 @@
-import React, { useState, ChangeEvent, FormEvent } from 'react';
+import { useState, ChangeEvent, FormEvent, useEffect } from 'react';
 import { format } from 'date-fns';
 
 type ApplicationStatus = 'Applied' | 'Interview' | 'Offer' | 'Rejected';
@@ -21,151 +21,124 @@ const parseJobUrl = async (url: string): Promise<{ company: string; position: st
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase();
     const pathname = urlObj.pathname;
+    const searchParams = urlObj.searchParams;
     
-    // Extract company name from domain or path
-    const getCompanyFromUrl = (domain: string, path: string): string => {
-      // First try to get company from path (for job boards)
-      const pathParts = path.split('/');
-      const companyIndex = pathParts.findIndex(part => 
-        part === 'jobs' || part === 'careers' || part === 'job'
-      );
+    // Helper function to format company names professionally
+    const formatCompanyName = (name: string): string => {
+      // Remove common suffixes and prefixes
+      const cleanName = name
+        .replace(/^careers-|^jobs-|^job-|^career-/, '')
+        .replace(/-careers$|-jobs$|-job$|-career$/, '')
+        .replace(/-inc$|-llc$|-ltd$|-corp$|-co$/, '');
       
-      if (companyIndex > 0) {
-        const companyPart = pathParts[companyIndex - 1];
-        if (companyPart && companyPart !== 'www' && companyPart !== 'careers' && companyPart !== 'jobs') {
-          return companyPart
-            .split('-')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      // Split by common separators and format each word
+      return cleanName
+        .split(/[-_]/)
+        .map(word => {
+          // Handle common abbreviations
+          const abbreviations: { [key: string]: string } = {
+            'inc': 'Inc.',
+            'llc': 'LLC',
+            'ltd': 'Ltd.',
+            'corp': 'Corp.',
+            'co': 'Co.'
+          };
+          
+          // Convert to proper case
+          const formatted = word
+            .split(/(?=[A-Z])/) // Split on capital letters
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
             .join(' ');
-        }
-      }
-      
-      // If no company in path, try domain
-      const cleanDomain = domain
-        .replace(/^careers\.|^jobs\.|^www\.|^job-boards\./, '') // Remove common subdomains
-        .replace(/\.com$|\.org$|\.net$|\.io$|\.ai$/, ''); // Remove TLDs
-      
-      // Split by dots and take the first part
-      const companyPart = cleanDomain.split('.')[0];
-      
-      // Handle special cases
-      const specialCases: { [key: string]: string } = {
-        'aexp': 'American Express',
-        'adobe': 'Adobe',
-        'indeed': 'Indeed',
-        'linkedin': 'LinkedIn',
-        'greenhouse': 'Greenhouse'
-      };
-      
-      if (specialCases[companyPart]) {
-        return specialCases[companyPart];
-      }
-      
-      // Convert to proper case for other companies
-      return companyPart
-        .split('-')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          
+          // Check if the word is a known abbreviation
+          return abbreviations[word.toLowerCase()] || formatted;
+        })
         .join(' ');
+    };
+    
+    // Extract company name from domain
+    const getCompanyFromDomain = (domain: string): string => {
+      // Remove common subdomains and TLDs
+      const cleanDomain = domain
+        .replace(/^careers\.|^jobs\.|^www\.|^job-boards\.|^about\./, '')
+        .replace(/\.com$|\.org$|\.net$|\.io$|\.ai$/, '');
+      
+      // Get the main domain part
+      const mainDomain = cleanDomain.split('.')[0];
+      
+      // Format the domain name professionally
+      return formatCompanyName(mainDomain);
     };
 
     // Extract position from URL
-    const getPositionFromUrl = async (path: string, hostname: string): Promise<string> => {
-      const pathParts = path.split('/');
-      
-      // Try to find position after 'jobs' or 'job'
-      const jobIndex = pathParts.findIndex(part => part === 'jobs' || part === 'job');
-      if (jobIndex !== -1) {
-        // For Greenhouse.io format
-        if (hostname.includes('greenhouse.io')) {
-          const jobId = pathParts[jobIndex + 1]?.split('?')[0];
-          if (jobId) {
-            try {
-              // Try to fetch job details from Greenhouse API
-              const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${pathParts[jobIndex - 1]}/jobs/${jobId}`);
-              if (response.ok) {
-                const data = await response.json();
-                return data.title || jobId;
-              }
-            } catch (error) {
-              console.error('Error fetching job details:', error);
-            }
-          }
-        }
-        
-        // For other formats where position is after 'jobs'
-        if (pathParts[jobIndex + 1]) {
-          const positionPart = pathParts[jobIndex + 1];
-          // Remove any query parameters
-          const cleanPosition = positionPart.split('?')[0];
-          return cleanPosition
-            .split('-')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-        }
-      }
-      
-      // Fallback to last part of URL
-      const lastPart = pathParts[pathParts.length - 1].split('?')[0];
-      return lastPart
-        .split('-')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-    };
-
-    // Extract location from URL or job details
-    const getLocationFromUrl = async (path: string, hostname: string): Promise<string> => {
-      try {
-        // For any job board, try to fetch the job details
-        const response = await fetch(path);
-        if (response.ok) {
-          const html = await response.text();
-          
-          // Look for location information in common formats
-          const locationPatterns = [
-            /location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /job location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /work location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /office location:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /based in:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /work from:?\s*([^<,]+(?:,\s*[^<,]+)*)/i,
-            /remote:?\s*([^<,]+(?:,\s*[^<,]+)*)/i
-          ];
-
-          // Try each pattern until we find a match
-          for (const pattern of locationPatterns) {
-            const match = html.match(pattern);
-            if (match) {
-              const location = match[1].trim();
-              // Clean up the location text
-              return location
-                .replace(/<[^>]*>/g, '') // Remove HTML tags
-                .replace(/\s+/g, ' ')    // Normalize whitespace
-                .trim();
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching job details:', error);
+    const getPositionFromUrl = (path: string, searchParams: URLSearchParams): string => {
+      // Try to get position from search params first
+      const titleParam = searchParams.get('title') || searchParams.get('q');
+      if (titleParam) {
+        return decodeURIComponent(titleParam)
+          .replace(/["']/g, '') // Remove quotes
+          .trim();
       }
 
-      // If no location found, return empty string
+      // Special handling for job boards like Eightfold: if 'pid' param exists and path is generic
+      if (searchParams.get('pid')) {
+        return '';
+      }
+
+      // Try to get position from path
+      const pathParts = path.split('/').filter(Boolean);
+      const lastPart = pathParts[pathParts.length - 1];
+      const genericPaths = ['careers', 'jobs', 'positions', 'search', 'openings', 'opportunities'];
+      if (lastPart && !genericPaths.includes(lastPart.toLowerCase())) {
+        const positionPart = lastPart.replace(/^\d+-/, '');
+        return positionPart
+          .split(/[-_]/)
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+          .join(' ');
+      }
+      // If last part is generic, return empty string to prompt manual entry
       return '';
     };
 
-    const company = getCompanyFromUrl(hostname, pathname);
-    const position = await getPositionFromUrl(pathname, hostname);
-    const location = await getLocationFromUrl(pathname, hostname);
+    // Extract location from URL
+    const getLocationFromUrl = (searchParams: URLSearchParams): string => {
+      const locations = searchParams.getAll('location');
+      if (locations.length > 0) {
+        return locations
+          .map(loc => decodeURIComponent(loc))
+          .join(', ');
+      }
+      return '';
+    };
+
+    // Get company name from domain
+    const company = getCompanyFromDomain(hostname);
+    
+    // Get position from URL
+    const position = getPositionFromUrl(pathname, searchParams);
+    
+    // Get location from URL
+    const location = getLocationFromUrl(searchParams);
 
     return { company, position, location };
   } catch (error) {
     console.error('Error parsing URL:', error);
+    return { company: '', position: '', location: '' };
   }
-  
-  return { company: '', position: '', location: '' };
 };
 
 function App() {
-  const [applications, setApplications] = useState<JobApplication[]>([]);
+  // Load applications from localStorage on initial render
+  const [applications, setApplications] = useState<JobApplication[]>(() => {
+    const savedApplications = localStorage.getItem('jobApplications');
+    return savedApplications ? JSON.parse(savedApplications) : [];
+  });
+
+  // Save applications to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('jobApplications', JSON.stringify(applications));
+  }, [applications]);
+
   const [newApplication, setNewApplication] = useState<Partial<JobApplication>>({
     company: '',
     position: '',
@@ -176,6 +149,101 @@ function App() {
     interviewDate: '',
     interviewTime: '',
   });
+  const [editingApplication, setEditingApplication] = useState<string | null>(null);
+
+  // Add export functionality
+  const handleExportData = () => {
+    const dataStr = JSON.stringify(applications, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    
+    const exportFileDefaultName = `job-applications-${format(new Date(), 'yyyy-MM-dd')}.json`;
+    
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+  };
+
+  // Add CSV export functionality
+  const handleExportCSV = () => {
+    if (applications.length === 0) return;
+    // Define user-friendly headers and mapping
+    const headers = [
+      'Company',
+      'Position',
+      'Location',
+      'Status',
+      'Date Applied',
+      'Interview Date',
+      'Interview Time',
+      'Job Link',
+    ];
+    const csvRows = [
+      headers.join(','),
+      ...applications.map(app => {
+        // Use the raw jobLink URL (quoted)
+        let jobLinkDisplay = app.jobLink ?? '';
+        // Format interview time as 12-hour with AM/PM
+        let interviewTimeDisplay = '';
+        if (app.interviewTime) {
+          const [hours, minutes] = app.interviewTime.split(':');
+          const date = new Date();
+          date.setHours(parseInt(hours, 10));
+          date.setMinutes(parseInt(minutes, 10));
+          interviewTimeDisplay = format(date, 'h:mm a');
+        }
+        // Ensure interview date is always just the date string
+        let interviewDateDisplay = app.interviewDate ?? '';
+        return [
+          JSON.stringify(app.company ?? ''),
+          JSON.stringify(app.position ?? ''),
+          JSON.stringify(app.location ?? ''),
+          JSON.stringify(app.status ?? ''),
+          JSON.stringify(app.appliedDate ?? ''),
+          JSON.stringify(interviewDateDisplay),
+          JSON.stringify(interviewTimeDisplay),
+          JSON.stringify(jobLinkDisplay)
+        ].join(',');
+      })
+    ].join('\r\n');
+
+    const blob = new Blob([csvRows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `job-applications-${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Add import functionality
+  const handleImportData = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const importedData = JSON.parse(e.target?.result as string);
+          if (Array.isArray(importedData)) {
+            setApplications(importedData);
+          }
+        } catch (error) {
+          console.error('Error importing data:', error);
+          alert('Error importing data. Please make sure the file is valid.');
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // Add clear all data functionality
+  const handleClearData = () => {
+    if (window.confirm('Are you sure you want to clear all your job applications? This cannot be undone.')) {
+      setApplications([]);
+      localStorage.removeItem('jobApplications');
+    }
+  };
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -210,6 +278,20 @@ function App() {
     ));
   };
 
+  const handleInterviewDetailsChange = (id: string, field: 'interviewDate' | 'interviewTime', value: string) => {
+    setApplications(applications.map((app: JobApplication) => 
+      app.id === id ? { ...app, [field]: value } : app
+    ));
+  };
+
+  const startEditing = (id: string) => {
+    setEditingApplication(id);
+  };
+
+  const stopEditing = () => {
+    setEditingApplication(null);
+  };
+
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setNewApplication((prev: Partial<JobApplication>) => ({
@@ -224,7 +306,7 @@ function App() {
       setNewApplication((prev: Partial<JobApplication>) => ({
         ...prev,
         company: company || prev.company,
-        position: position || prev.position,
+        position: position === undefined ? prev.position : position,
         location: location || prev.location
       }));
     }
@@ -264,6 +346,37 @@ function App() {
             Job Application Tracker
           </h1>
           <p className="text-gray-400">Keep track of your job applications and interviews</p>
+          
+          {/* Add data management buttons */}
+          <div className="mt-4 flex justify-center gap-4">
+            <button
+              onClick={handleExportData}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
+            >
+              Export Data
+            </button>
+            <button
+              onClick={handleExportCSV}
+              className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
+            >
+              Export as CSV
+            </button>
+            <label className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200 cursor-pointer">
+              Import Data
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleImportData}
+                className="hidden"
+              />
+            </label>
+            <button
+              onClick={handleClearData}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
+            >
+              Clear All Data
+            </button>
+          </div>
         </div>
         
         <form onSubmit={handleSubmit} className="bg-gray-800/50 backdrop-blur-sm p-8 rounded-xl shadow-xl mb-8 border border-gray-700">
@@ -313,6 +426,9 @@ function App() {
                 className="w-full px-4 py-2 rounded-lg bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 required
               />
+              {newApplication.position === '' && (
+                <p className="mt-1 text-sm text-red-400">Can't fetch job title. Please enter it manually.</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">Location</label>
@@ -433,12 +549,49 @@ function App() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{app.appliedDate}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
                       {app.status === 'Interview' && (
-                        <div className="flex flex-col">
-                          {app.interviewDate && (
-                            <span className="text-gray-300">Date: {formatInterviewDate(app.interviewDate)}</span>
-                          )}
-                          {app.interviewTime && (
-                            <span className="text-gray-300">Time: {formatInterviewTime(app.interviewTime)}</span>
+                        <div className="flex flex-col gap-2">
+                          {editingApplication === app.id ? (
+                            <>
+                              <div>
+                                <label className="block text-xs text-gray-400 mb-1">Date</label>
+                                <input
+                                  type="date"
+                                  value={app.interviewDate}
+                                  onChange={(e) => handleInterviewDetailsChange(app.id, 'interviewDate', e.target.value)}
+                                  className="text-sm rounded-md bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-gray-400 mb-1">Time</label>
+                                <input
+                                  type="time"
+                                  value={app.interviewTime}
+                                  onChange={(e) => handleInterviewDetailsChange(app.id, 'interviewTime', e.target.value)}
+                                  className="text-sm rounded-md bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                />
+                              </div>
+                              <button
+                                onClick={stopEditing}
+                                className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+                              >
+                                Done
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {app.interviewDate && (
+                                <span className="text-gray-300">Date: {formatInterviewDate(app.interviewDate)}</span>
+                              )}
+                              {app.interviewTime && (
+                                <span className="text-gray-300">Time: {formatInterviewTime(app.interviewTime)}</span>
+                              )}
+                              <button
+                                onClick={() => startEditing(app.id)}
+                                className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+                              >
+                                Edit
+                              </button>
+                            </>
                           )}
                         </div>
                       )}
